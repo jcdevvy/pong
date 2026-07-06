@@ -1,12 +1,47 @@
 // "ws" is the npm package we installed — it's what lets a plain Node.js
 // program speak the WebSocket protocol (persistent, two-way connections).
 const { WebSocketServer } = require("ws");
+// "http" and "fs"/"path" are BUILT INTO Node — no npm install needed. "http"
+// lets us serve regular web pages; "fs" reads files off disk; "path" builds
+// file paths safely across operating systems.
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
 
 const PORT = 8080;
-// Creating this starts the server listening immediately — from this point on,
-// any browser that connects to ws://localhost:8080 triggers the "connection"
-// event below.
-const wss = new WebSocketServer({ port: PORT });
+
+// Maps a file extension to the header browsers need to know how to treat
+// the response (otherwise a .js file might get served as plain text and
+// silently fail to run).
+const CONTENT_TYPES = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+};
+
+// A plain HTTP server: whenever a browser requests a page (e.g. visiting
+// http://your-server:8080/), this reads the matching file off disk and
+// sends it back. "/" maps to index.html, same as any normal website.
+const httpServer = http.createServer((req, res) => {
+  const filePath = req.url === "/" ? "index.html" : req.url.slice(1);
+  const fullPath = path.join(__dirname, filePath);
+  const ext = path.extname(fullPath);
+
+  fs.readFile(fullPath, (err, content) => {
+    if (err) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": CONTENT_TYPES[ext] || "text/plain" });
+    res.end(content);
+  });
+});
+
+// Attaching the WebSocket server to the SAME httpServer (via the `server`
+// option, instead of its own `port`) means both regular web pages AND
+// WebSocket connections come through port 8080 together — one address for
+// your friend to connect to, not two.
+const wss = new WebSocketServer({ server: httpServer });
 
 // These match the values in game.js's canvas — the server needs to know the
 // playing field size to do the same bounce/collision math the client used to do.
@@ -16,6 +51,17 @@ const PADDLE_WIDTH = 10;
 const PADDLE_HEIGHT = 80;
 const PADDLE_SPEED = 6;
 const BALL_SIZE = 8;
+
+// Normal ball speed. Both dx and dy share this same value (so the ball
+// always travels on a perfect diagonal), which is what makes "speed" a
+// single number instead of two separate constants.
+const BASE_SPEED = 6;
+
+// A player only counts as "parrying" if they pressed F within this many ms
+// before the ball actually reaches their paddle — roughly 3 frames at 60fps.
+const PARRY_WINDOW_MS = 50;
+const PARRY_SPEED_BONUS = 6; // added to current speed per successful parry
+const MAX_SPEED = 24;
 
 // Tracks which WebSocket connection belongs to which player.
 // Starts empty; gets filled in as people connect (see wss.on("connection") below).
@@ -27,11 +73,19 @@ let players = {}; // { left: ws, right: ws }
 const state = {
   leftPaddle: { y: 160 },
   rightPaddle: { y: 160 },
-  ball: { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2, dx: 4, dy: 3 },
+  ball: { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2, dx: BASE_SPEED, dy: BASE_SPEED, speed: BASE_SPEED },
   leftScore: 0,
   rightScore: 0,
   paused: false, // either player can toggle this; freezes the whole game for both
+  parryCount: 0, // increments on every successful parry — clients watch for
+  // this changing (same trick as leftScore/rightScore) to know when to play
+  // the parry sound, since a momentary boolean could get missed between ticks.
 };
+
+// Timestamp (ms) of each player's most recent "parry" key press — 0 means
+// "hasn't pressed it (recently)." Checked at the moment of paddle collision
+// to decide whether it counts as a parry.
+const lastParryPress = { left: 0, right: 0 };
 
 // What keys each player currently has held down. Updated whenever a client
 // sends an "input" message (see ws.on("message") below), read every tick by
@@ -82,6 +136,11 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "pause") {
       // Either player can toggle this — flip it for both, since state is shared.
       state.paused = !state.paused;
+    } else if (msg.type === "parry") {
+      // Just record WHEN this happened — update() checks how recent this
+      // timestamp is at the exact moment the ball reaches this player's
+      // paddle, rather than us deciding right now whether it "counts."
+      lastParryPress[role] = Date.now();
     }
   });
 
@@ -145,7 +204,7 @@ function update() {
     ball.y + BALL_SIZE >= state.leftPaddle.y &&
     ball.y <= state.leftPaddle.y + PADDLE_HEIGHT
   ) {
-    ball.dx *= -1;
+    applyPaddleHit("left", 1); // ball now heads right (+dx)
     ball.x = leftX + PADDLE_WIDTH; // snap ball out of the paddle so it doesn't get "stuck" re-triggering this
   }
 
@@ -155,7 +214,7 @@ function update() {
     ball.y + BALL_SIZE >= state.rightPaddle.y &&
     ball.y <= state.rightPaddle.y + PADDLE_HEIGHT
   ) {
-    ball.dx *= -1;
+    applyPaddleHit("right", -1); // ball now heads left (-dx)
     ball.x = rightX - BALL_SIZE;
   }
 
@@ -169,12 +228,44 @@ function update() {
   }
 }
 
-// Re-centers the ball and sends it toward whoever just got scored on
-// (flipping dx reverses its horizontal direction).
+// Runs whenever the ball hits a paddle. `side` is "left"/"right" (whose
+// paddle got hit); `dxSign` is which horizontal direction the ball should
+// now travel (+1 = rightward, -1 = leftward).
+//
+// Speed rule: a normal hit resets speed back to BASE_SPEED. A PARRIED hit (F
+// pressed within PARRY_WINDOW_MS of this exact moment) instead ADDS
+// PARRY_SPEED_BONUS to whatever the current speed already was, capped at
+// MAX_SPEED — so three parries in a row chain: 6 -> 12 -> 18 -> 24 (capped).
+function applyPaddleHit(side, dxSign) {
+  const isParry = Date.now() - lastParryPress[side] <= PARRY_WINDOW_MS;
+  const ball = state.ball;
+
+  ball.speed = isParry
+    ? Math.min(ball.speed + PARRY_SPEED_BONUS, MAX_SPEED)
+    : BASE_SPEED;
+
+  if (isParry) {
+    state.parryCount++;
+  }
+
+  // Recompute velocity from the current speed — this is what actually makes
+  // the ball faster, not just direction change. dy keeps whatever vertical
+  // direction it already had (wall bounces control that sign independently);
+  // only its magnitude gets rescaled.
+  ball.dx = dxSign * ball.speed;
+  ball.dy = Math.sign(ball.dy) * ball.speed;
+}
+
+// Re-centers the ball and sends it toward whoever just got scored on.
+// Speed always resets to BASE_SPEED here — a boosted rally shouldn't carry
+// its speed into the next point.
 function resetBall() {
+  const servingDirection = -Math.sign(state.ball.dx) || 1; // toward whoever just conceded
   state.ball.x = CANVAS_WIDTH / 2;
   state.ball.y = CANVAS_HEIGHT / 2;
-  state.ball.dx *= -1;
+  state.ball.dx = servingDirection * BASE_SPEED;
+  state.ball.dy = BASE_SPEED;
+  state.ball.speed = BASE_SPEED;
   // Freeze the ball here for SERVE_DELAY_MS — update() checks this and
   // returns early until the delay passes.
   serveDelayUntil = Date.now() + SERVE_DELAY_MS;
@@ -203,4 +294,9 @@ setInterval(() => {
   broadcast();
 }, 1000 / 60);
 
-console.log(`WebSocket server running on ws://localhost:${PORT}`);
+// Start the combined HTTP + WebSocket server. Note we call .listen() on
+// httpServer now, not on a bare port — the WebSocketServer above is just
+// piggybacking on this same listener.
+httpServer.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});

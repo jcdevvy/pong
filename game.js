@@ -148,6 +148,28 @@ function playScore(side) {
   });
 }
 
+// A harmonic minor scale, A3 up to A4 (8 notes spanning an octave). Harmonic
+// minor is natural minor with a raised 7th (the G# here, instead of a plain
+// G) — that raised note is what gives it the "neoclassical/exotic" edge
+// compared to a plain minor scale.
+function playParry() {
+  const now = audioCtx.currentTime;
+  const notes = [
+    220.0, // A3
+    246.94, // B3
+    261.63, // C4
+    293.66, // D4
+    329.63, // E4
+    349.23, // F4
+    415.3, // G#4 — the raised 7th that makes it "harmonic" minor
+    440.0, // A4
+  ];
+  const noteGap = 1 / notes.length; // spread evenly across ~1 second total
+  notes.forEach((freq, i) => {
+    playToneAt(freq, noteGap * 0.9, now + i * noteGap);
+  });
+}
+
 // Tracks the ball's previous direction so we can detect the exact moment it
 // changes (i.e. a bounce/hit just happened) when a new state arrives.
 let prevBallDx = null;
@@ -159,9 +181,17 @@ let prevBallDy = null;
 let prevLeftScore = 0;
 let prevRightScore = 0;
 
+// Tracks the parry counter the same way — lets us detect "a parry just
+// succeeded" separately from an ordinary bounce.
+let prevParryCount = 0;
+
 // Opens the connection to server.js. Nothing is sent yet — this just
 // establishes the pipe. "ws://" is the WebSocket equivalent of "http://".
-const socket = new WebSocket("ws://localhost:8080");
+// location.hostname is whatever address THIS PAGE was actually loaded from
+// (e.g. "localhost" on your PC, or the EC2 public IP for your friend) — using
+// it instead of a hardcoded "localhost" means the same game.js works
+// correctly no matter where it's being served from.
+const socket = new WebSocket(`ws://${location.hostname}:8080`);
 
 // Fires once, as soon as the connection is successfully established.
 socket.onopen = () => {
@@ -188,10 +218,17 @@ socket.onmessage = (event) => {
     const leftScored = msg.leftScore !== prevLeftScore;
     const rightScored = msg.rightScore !== prevRightScore;
 
+    const parried = msg.parryCount !== prevParryCount;
+
     if (leftScored) {
       playScore("left");
     } else if (rightScored) {
       playScore("right");
+    } else if (parried) {
+      // A successful parry gets its own special sound INSTEAD of the normal
+      // bounce thud — checked before the regular bounce detection below so
+      // the two don't both fire on the same tick.
+      playParry();
     } else if (prevBallDx !== null) {
       // Detect a bounce: compare the ball's direction in this new state
       // against last time. A flipped sign means it just hit something.
@@ -213,6 +250,7 @@ socket.onmessage = (event) => {
     prevBallDy = msg.ball.dy;
     prevLeftScore = msg.leftScore;
     prevRightScore = msg.rightScore;
+    prevParryCount = msg.parryCount;
 
     // Sent 60x/sec: the current positions of everything. We just store it —
     // draw() (below) is what actually renders it to the screen.
@@ -280,6 +318,14 @@ function updateKeyState(key, isPressed) {
   } else if (key === "s" || key === "ArrowDown") {
     keyState.down = isPressed;
     sendInput();
+  } else if (key.toLowerCase() === "f" && isPressed) {
+    // Only send on the actual press (isPressed), not on release — a parry
+    // is a single instant, not something you hold. The server just records
+    // when this arrived and checks the timing itself when the ball reaches
+    // your paddle, so nothing else needs to happen here.
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "parry" }));
+    }
   }
 }
 
