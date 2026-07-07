@@ -16,25 +16,48 @@ const RIGHT_X = canvas.width - 20 - PADDLE_WIDTH;
 // to fill whatever width/height you give it, so the same sprite works for
 // both paddles without needing to match PADDLE_WIDTH/HEIGHT exactly.
 
-// Castle tower: crenellations (the notched battlements) at the top, solid
-// stone shaft below.
-const towerSprite = [
-  [1, 0, 1, 0, 1, 0, 1, 0],
-  [1, 0, 1, 0, 1, 0, 1, 0],
-  [1, 1, 1, 1, 1, 1, 1, 1],
-  [1, 1, 1, 1, 1, 1, 1, 1],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 1, 1, 0],
+// Longsword: straight, symmetric double-edged blade, straight crossguard.
+// Read top-to-bottom: tapered tip, 8 rows of blade, crossguard, grip, pommel.
+const longswordSprite = [
+  [0, 0, 0, 0, 1, 0, 0, 0], // tip
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0], // blade end
+  [0, 1, 1, 1, 1, 1, 1, 0], // crossguard — straight, symmetric
+  [0, 0, 0, 1, 1, 0, 0, 0], // grip
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+  [0, 0, 1, 1, 1, 1, 0, 0], // pommel
+  [0, 0, 1, 1, 1, 1, 0, 0],
+  [0, 0, 0, 1, 1, 0, 0, 0],
+];
+
+// Saber: single-edged, blade offset to one side (thicker "spine" on the
+// left of center instead of symmetric), with a swept, asymmetric guard —
+// deliberately a different silhouette from the longsword so the two sides
+// read as different fighters, not a mirrored copy.
+const saberSprite = [
+  [0, 0, 0, 0, 1, 0, 0, 0], // tip
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 1, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0], // blade end
+  [0, 1, 1, 0, 1, 1, 1, 0], // swept guard — asymmetric, gap on one side
+  [0, 0, 0, 0, 1, 1, 0, 0], // grip
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
+  [0, 0, 0, 1, 1, 1, 0, 0], // pommel
+  [0, 0, 0, 1, 1, 1, 0, 0],
+  [0, 0, 0, 0, 1, 1, 0, 0],
 ];
 
 // Spiked mace head: a rounded blob with small spikes poking out on each side.
@@ -73,6 +96,52 @@ function drawSprite(sprite, x, y, width, height, color) {
 // it. Pushed to at the end of every draw() call, capped at TRAIL_LENGTH.
 const ballTrail = [];
 const TRAIL_LENGTH = 6;
+
+// --- Ghosthit ---
+const GHOSTHIT_COST = 3; // must match server.js — only used here to color the points display
+const GHOST_FADE_DISTANCE = canvas.width * 0.75; // mirrors fully fade after traveling this far
+const GHOST_Y_OFFSETS = [-24, 0, 24]; // vertical spread between the 3 mirror images
+
+// Active mirror balls: { x, y, dx, dy, spawnX }. Purely cosmetic and purely
+// client-side — the server only tells us a Ghosthit happened and where the
+// real ball was at that instant; everything about how the mirrors move and
+// fade from there is decided here, since they never need to be hit or agreed
+// on between the two browsers.
+let ghostBalls = [];
+
+// Spawns 3 mirror balls at the real ball's current position, each copying
+// its direction so they initially fly alongside it, spread out vertically
+// so they read as distinct "images" rather than one ball.
+function spawnGhostBalls(ball) {
+  ghostBalls = GHOST_Y_OFFSETS.map((offset) => ({
+    x: ball.x,
+    y: ball.y + offset,
+    dx: ball.dx,
+    dy: ball.dy,
+    spawnX: ball.x,
+  }));
+}
+
+// Moves each mirror along the straight line it started on (no wall/paddle
+// bounces — real ball has those, mirrors don't need to) and drops any that
+// have traveled far enough to have fully faded.
+function updateGhostBalls() {
+  ghostBalls.forEach((g) => {
+    g.x += g.dx;
+    g.y += g.dy;
+  });
+  ghostBalls = ghostBalls.filter((g) => Math.abs(g.x - g.spawnX) < GHOST_FADE_DISTANCE);
+}
+
+function drawGhostBalls() {
+  ghostBalls.forEach((g) => {
+    const traveled = Math.abs(g.x - g.spawnX);
+    // Caps at 0.6 opacity (never fully solid) so they're never mistaken for
+    // the real ball, which is always drawn fully opaque.
+    const alpha = Math.max(0, 1 - traveled / GHOST_FADE_DISTANCE) * 0.6;
+    drawSprite(maceSprite, g.x, g.y, BALL_SIZE, BALL_SIZE, `rgba(255, 255, 255, ${alpha})`);
+  });
+}
 
 // This is now the ONLY place game state lives on the client. We don't
 // calculate any of this ourselves anymore — it just gets overwritten
@@ -185,6 +254,10 @@ let prevRightScore = 0;
 // succeeded" separately from an ordinary bounce.
 let prevParryCount = 0;
 
+// Same trick again for Ghosthit — lets us detect "a mirror-spawning hit just
+// happened" separately from an ordinary bounce.
+let prevGhostHitCount = 0;
+
 // Opens the connection to server.js. Nothing is sent yet — this just
 // establishes the pipe. "ws://" is the WebSocket equivalent of "http://".
 // location.hostname is whatever address THIS PAGE was actually loaded from
@@ -246,11 +319,18 @@ socket.onmessage = (event) => {
       if (dyFlipped) playHit(); // wall bounce — no side, use the neutral tone
     }
 
+    // Checked independently of the sound logic above — a Ghosthit can land
+    // on the same tick as a bounce sound, and both should still happen.
+    if (msg.ghostHitCount !== prevGhostHitCount) {
+      spawnGhostBalls(msg.ball);
+    }
+
     prevBallDx = msg.ball.dx;
     prevBallDy = msg.ball.dy;
     prevLeftScore = msg.leftScore;
     prevRightScore = msg.rightScore;
     prevParryCount = msg.parryCount;
+    prevGhostHitCount = msg.ghostHitCount;
 
     // Sent 60x/sec: the current positions of everything. We just store it —
     // draw() (below) is what actually renders it to the screen.
@@ -326,12 +406,94 @@ function updateKeyState(key, isPressed) {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "parry" }));
     }
+  } else if (key.toLowerCase() === "c" && isPressed) {
+    // Same one-shot-on-press idea as parry. The server decides whether we
+    // actually have enough points to arm it — we just ask.
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "ghosthit" }));
+    }
   }
 }
 
-function draw() {
-  ctx.fillStyle = "black";
+// --- Background: dark castle backdrop ---
+// Every shape here uses dark, desaturated grays — well above pure black so
+// they actually read as shapes, but nowhere near white. That's what keeps
+// the ball/paddles visible even where they cross directly in front of the
+// skyline: contrast, not screen position (the ball travels through the
+// entire canvas height, so there's no "safe" empty zone to hide art in).
+const SKY_COLOR = "#0b0b12"; // slightly blue-black "night sky", not pure #000
+const STONE_COLOR = "#1c1c26";
+const WINDOW_GLOW = "rgba(255, 200, 80, 0.15)"; // faint, warm, low-opacity
+
+// Fixed (not random) tower heights — same skyline every load, so it's easy
+// to reason about and tweak rather than chasing a moving target.
+const TOWER_HEIGHTS = [30, 50, 35, 60, 25, 45];
+const TOWER_WIDTH = 40;
+const SKYLINE_BASE_Y = 70; // skyline occupies roughly the top 70px
+
+// The score/mana text sits around x 310-480, y 18-78 — no tower gets drawn
+// in this x range at all, so the text is never rendered over busy pixel
+// art. GATE_GAP_END - GATE_GAP_START matches roughly that text width.
+const GATE_GAP_START = 320;
+const GATE_GAP_END = 480;
+
+// Moat + gate fill that gap, but sit BELOW it (y >= 80, once the text's
+// vertical extent has ended) rather than on the towers' shared baseline —
+// that's what keeps them from overlapping the text without needing to
+// shrink them down to nothing.
+const MOAT_COLOR = "#0a1a2a";
+const MOAT_Y = 80;
+const MOAT_HEIGHT = 8;
+const GATE_COLOR = "#141420";
+const GATE_DOORWAY_COLOR = "#000000";
+
+function drawCastleBackground() {
+  ctx.fillStyle = SKY_COLOR;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let x = 0; x < canvas.width; x += TOWER_WIDTH) {
+    if (x >= GATE_GAP_START && x < GATE_GAP_END) continue; // gap for the score/mana text
+
+    const towerHeight = TOWER_HEIGHTS[(x / TOWER_WIDTH) % TOWER_HEIGHTS.length];
+    ctx.fillStyle = STONE_COLOR;
+    ctx.fillRect(x, SKYLINE_BASE_Y - towerHeight, TOWER_WIDTH - 6, towerHeight);
+
+    // Crenellations: notches cut into each tower's top, redrawn in the sky
+    // color rather than cleared, so it stays a flat, crisp pixel-art look.
+    ctx.fillStyle = SKY_COLOR;
+    for (let n = 0; n < TOWER_WIDTH - 6; n += 10) {
+      ctx.fillRect(x + n, SKYLINE_BASE_Y - towerHeight, 5, 6);
+    }
+
+    // One dim window glow near each tower's base.
+    ctx.fillStyle = WINDOW_GLOW;
+    ctx.fillRect(x + TOWER_WIDTH / 2 - 3, SKYLINE_BASE_Y - 15, 6, 8);
+  }
+
+  // Moat: a dark water band spanning the full width, marking a clean line
+  // between the distant skyline and the playing field below it.
+  ctx.fillStyle = MOAT_COLOR;
+  ctx.fillRect(0, MOAT_Y, canvas.width, MOAT_HEIGHT);
+
+  // Gate: fills the gap between the two flanking tower groups, framed by
+  // stone with a darker doorway cut into its center.
+  const gateY = MOAT_Y + MOAT_HEIGHT;
+  const gateHeight = 24;
+  ctx.fillStyle = GATE_COLOR;
+  ctx.fillRect(GATE_GAP_START, gateY, GATE_GAP_END - GATE_GAP_START, gateHeight);
+  ctx.fillStyle = GATE_DOORWAY_COLOR;
+  ctx.fillRect(GATE_GAP_START + 40, gateY + 4, GATE_GAP_END - GATE_GAP_START - 80, gateHeight - 4);
+
+  // Flanking stone pillars in the margins outside the paddles — the ball
+  // and paddles never enter x < LEFT_X or x > RIGHT_X + PADDLE_WIDTH, so
+  // detail here carries zero contrast risk. The W/S/F/C key hints (drawn
+  // later, in white) sit on top of this.
+  ctx.fillRect(0, 0, LEFT_X - 4, canvas.height);
+  ctx.fillRect(RIGHT_X + PADDLE_WIDTH + 4, 0, canvas.width, canvas.height);
+}
+
+function draw() {
+  drawCastleBackground();
 
   // --- Ball trail: draw OLDER positions first, each fainter than the last,
   // so the most recent trail position is the most visible. This has to
@@ -342,8 +504,11 @@ function draw() {
     ctx.fillRect(pos.x, pos.y, BALL_SIZE, BALL_SIZE);
   });
 
-  drawSprite(towerSprite, LEFT_X, latestState.leftPaddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, "white");
-  drawSprite(towerSprite, RIGHT_X, latestState.rightPaddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, "white");
+  drawSprite(longswordSprite, LEFT_X, latestState.leftPaddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, "white");
+  drawSprite(saberSprite, RIGHT_X, latestState.rightPaddle.y, PADDLE_WIDTH, PADDLE_HEIGHT, "white");
+  // Mirrors drawn before the real ball so the real one always reads as the
+  // solid, "on top" one even where they overlap.
+  drawGhostBalls();
   drawSprite(maceSprite, latestState.ball.x, latestState.ball.y, BALL_SIZE, BALL_SIZE, "white");
 
   // Record this frame's ball position for next frame's trail, then trim
@@ -357,6 +522,37 @@ function draw() {
   ctx.fillStyle = "white";
   ctx.fillText(latestState.leftScore, canvas.width / 2 - 50, 50);
   ctx.fillText(latestState.rightScore, canvas.width / 2 + 30, 50);
+
+  // Ghosthit points, per side — labeled "Mana" instead of "Pts" so it can't
+  // be confused with the score above it, and reads as part of the same
+  // castle/medieval theme as the tower paddles and mace ball.
+  ctx.font = "16px sans-serif";
+  ctx.fillStyle = latestState.leftPoints >= GHOSTHIT_COST ? "#7CFC00" : "white";
+  ctx.fillText(`Mana: ${latestState.leftPoints ?? 0}`, canvas.width / 2 - 90, 75);
+  ctx.fillStyle = latestState.rightPoints >= GHOSTHIT_COST ? "#7CFC00" : "white";
+  ctx.fillText(`Mana: ${latestState.rightPoints ?? 0}`, canvas.width / 2 + 30, 75);
+
+  // Controls legend — always visible, tucked into the empty space below the
+  // playing field.
+  ctx.font = "14px sans-serif";
+  ctx.fillStyle = "white";
+  ctx.textAlign = "center";
+  ctx.fillText("W / S: Move     F: Parry     C: Ghosthit", canvas.width / 2, canvas.height - 10);
+  ctx.textAlign = "left";
+
+  // Same keys again, as a quick-glance reminder in the narrow strips outside
+  // each paddle — x < LEFT_X on the left, x > RIGHT_X + PADDLE_WIDTH on the
+  // right — which the ball/paddles never enter, so nothing else ever draws
+  // there. Centered under each letter for a clean stacked look.
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  const keyLabels = ["W", "S", "F", "C"];
+  keyLabels.forEach((label, i) => {
+    const y = 150 + i * 20;
+    ctx.fillText(label, 10, y);
+    ctx.fillText(label, canvas.width - 10, y);
+  });
+  ctx.textAlign = "left";
 
   if (latestState.waiting) {
     ctx.font = "24px sans-serif";
@@ -383,6 +579,7 @@ function draw() {
 // update(). The server is doing all the physics; we just redraw whatever
 // the latest received state is, as fast as the browser can (~60fps).
 function loop() {
+  updateGhostBalls();
   draw();
   requestAnimationFrame(loop);
 }

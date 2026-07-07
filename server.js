@@ -64,6 +64,11 @@ const PARRY_WINDOW_MS = 85;
 const PARRY_SPEED_BONUS = 6; // added to current speed per successful parry
 const MAX_SPEED = 24;
 
+// Ghosthit: costs this many points to arm. Points are earned 1-per-hit
+// (parry or normal), so this doubles as the "3 volleys to build up" rule —
+// you can't have 3 points without having hit the ball 3 times first.
+const GHOSTHIT_COST = 3;
+
 // Tracks which WebSocket connection belongs to which player.
 // Starts empty; gets filled in as people connect (see wss.on("connection") below).
 let players = {}; // { left: ws, right: ws }
@@ -81,7 +86,20 @@ const state = {
   parryCount: 0, // increments on every successful parry — clients watch for
   // this changing (same trick as leftScore/rightScore) to know when to play
   // the parry sound, since a momentary boolean could get missed between ticks.
+  leftPoints: 0,
+  rightPoints: 0,
+  // Increments whenever an armed Ghosthit actually triggers on a hit. Clients
+  // watch for this changing (same trick as parryCount) and, when it does,
+  // spawn the 3 mirror balls using whatever `ball` looks like in that same
+  // broadcast — its position/direction right after the hit is exactly where
+  // the mirrors should start from.
+  ghostHitCount: 0,
 };
+
+// Whether each player has armed Ghosthit and is waiting for their next
+// successful hit to trigger it. Spending the points happens at arm-time (C
+// press); the mirror spawn happens later, at the next hit.
+const ghostArmed = { left: false, right: false };
 
 // Timestamp (ms) of each player's most recent "parry" key press — 0 means
 // "hasn't pressed it (recently)." Checked at the moment of paddle collision
@@ -142,6 +160,16 @@ wss.on("connection", (ws) => {
       // timestamp is at the exact moment the ball reaches this player's
       // paddle, rather than us deciding right now whether it "counts."
       lastParryPress[role] = Date.now();
+    } else if (msg.type === "ghosthit") {
+      // Spend the points immediately on arming (not on the later trigger) —
+      // that's the "using ghosthit" moment per the design, and it stops a
+      // player from mashing C hoping to line one up for free.
+      const points = role === "left" ? state.leftPoints : state.rightPoints;
+      if (points >= GHOSTHIT_COST && !ghostArmed[role]) {
+        if (role === "left") state.leftPoints -= GHOSTHIT_COST;
+        else state.rightPoints -= GHOSTHIT_COST;
+        ghostArmed[role] = true;
+      }
     }
   });
 
@@ -153,6 +181,7 @@ wss.on("connection", (ws) => {
     // resuming wherever it happened to be when this player left.
     state.ball.x = CANVAS_WIDTH / 2;
     state.ball.y = CANVAS_HEIGHT / 2;
+    ghostArmed[role] = false; // don't let a fresh player inherit an armed charge
   });
 });
 
@@ -249,12 +278,25 @@ function applyPaddleHit(side, dxSign) {
     state.parryCount++;
   }
 
+  // Every successful hit (parry or normal) earns a point, regardless of
+  // whether it also happens to trigger Ghosthit below.
+  if (side === "left") state.leftPoints++;
+  else state.rightPoints++;
+
   // Recompute velocity from the current speed — this is what actually makes
   // the ball faster, not just direction change. dy keeps whatever vertical
   // direction it already had (wall bounces control that sign independently);
   // only its magnitude gets rescaled.
   ball.dx = dxSign * ball.speed;
   ball.dy = Math.sign(ball.dy) * ball.speed;
+
+  // If this player had Ghosthit armed, THIS is the hit it was waiting for —
+  // consume the charge and let clients know (via ball's post-hit position/
+  // direction, already set above) where to spawn the mirror balls.
+  if (ghostArmed[side]) {
+    ghostArmed[side] = false;
+    state.ghostHitCount++;
+  }
 }
 
 // Re-centers the ball and sends it toward whoever just got scored on.
