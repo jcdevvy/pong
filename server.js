@@ -58,8 +58,10 @@ const BALL_SIZE = 8;
 const BASE_SPEED = 6;
 
 // A player only counts as "parrying" if they pressed F within this many ms
-// before the ball actually reaches their paddle — roughly 3 frames at 60fps.
-const PARRY_WINDOW_MS = 50;
+// before the ball actually reaches their paddle. 50ms (~3 frames) proved too
+// tight in testing; 150ms felt a bit loose. 125ms splits the difference —
+// tune further based on feel.
+const PARRY_WINDOW_MS = 125;
 const PARRY_SPEED_BONUS = 6; // added to current speed per successful parry
 const MAX_SPEED = 24;
 
