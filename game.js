@@ -116,19 +116,20 @@ function spawnGhostBalls(ball) {
   ghostBalls = GHOST_Y_OFFSETS.map((offset) => ({
     x: ball.x,
     y: ball.y + offset,
-    dx: ball.dx,
-    dy: ball.dy,
     spawnX: ball.x,
   }));
 }
 
-// Moves each mirror along the straight line it started on (no wall/paddle
-// bounces — real ball has those, mirrors don't need to) and drops any that
-// have traveled far enough to have fully faded.
+// Moves each mirror by the REAL ball's current dx/dy (read fresh from
+// latestState every frame, not a snapshot taken at spawn time) — that's what
+// guarantees they always travel at exactly the same speed as the real ball,
+// even if it later speeds up off a parry or flips direction off a wall
+// bounce. They just don't clamp to the walls themselves the way the real
+// ball does, which is fine since they fade out well before reaching one.
 function updateGhostBalls() {
   ghostBalls.forEach((g) => {
-    g.x += g.dx;
-    g.y += g.dy;
+    g.x += latestState.ball.dx;
+    g.y += latestState.ball.dy;
   });
   ghostBalls = ghostBalls.filter((g) => Math.abs(g.x - g.spawnX) < GHOST_FADE_DISTANCE);
 }
@@ -223,17 +224,17 @@ function playScore(side) {
 // compared to a plain minor scale.
 function playParry() {
   const now = audioCtx.currentTime;
+  // Cut down from the full 8-note scale to just 4 — still lands on the
+  // raised-7th (G#4) that gave it the "harmonic minor" flavor, but the whole
+  // thing now finishes in ~240ms instead of ~1s, since a boosted parry can
+  // send the ball across the whole court in well under a second.
   const notes = [
     220.0, // A3
-    246.94, // B3
     261.63, // C4
-    293.66, // D4
-    329.63, // E4
-    349.23, // F4
-    415.3, // G#4 — the raised 7th that makes it "harmonic" minor
+    415.3, // G#4 — the raised 7th
     440.0, // A4
   ];
-  const noteGap = 1 / notes.length; // spread evenly across ~1 second total
+  const noteGap = 0.06;
   notes.forEach((freq, i) => {
     playToneAt(freq, noteGap * 0.9, now + i * noteGap);
   });
