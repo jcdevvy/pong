@@ -99,8 +99,17 @@ const TRAIL_LENGTH = 6;
 
 // --- Ghosthit ---
 const GHOSTHIT_COST = 3; // must match server.js — only used here to color the points display
-const GHOST_FADE_DISTANCE = canvas.width * 0.75; // mirrors fully fade after traveling this far
-const GHOST_Y_OFFSETS = [-24, 0, 24]; // vertical spread between the 3 mirror images
+
+// Fade only kicks in after 15% of the court's width has been crossed (fully
+// solid before that), then ramps down to fully invisible at 75% — matching
+// "fades away to nothing at about 75% of the court."
+const GHOST_FADE_START = canvas.width * 0.15;
+const GHOST_FADE_END = canvas.width * 0.75;
+
+// Each mirror scatters off at its own angle relative to the real hit's
+// direction (in radians) instead of all flying in lockstep with the real
+// ball — that's what actually sells "confusing," vs. 3 copies moving as one.
+const GHOST_SCATTER_ANGLES = [-0.5, 0, 0.5];
 
 // Active mirror balls: { x, y, dx, dy, spawnX }. Purely cosmetic and purely
 // client-side — the server only tells us a Ghosthit happened and where the
@@ -109,37 +118,51 @@ const GHOST_Y_OFFSETS = [-24, 0, 24]; // vertical spread between the 3 mirror im
 // on between the two browsers.
 let ghostBalls = [];
 
-// Spawns 3 mirror balls at the real ball's current position, each copying
-// its direction so they initially fly alongside it, spread out vertically
-// so they read as distinct "images" rather than one ball.
+// Spawns 3 mirror balls at the real ball's hit position, each on its own
+// scattered heading but at the SAME SPEED (magnitude) the real ball had at
+// that instant — trig splits that one speed into a different dx/dy per
+// angle rather than each mirror inheriting the exact same vector.
 function spawnGhostBalls(ball) {
-  ghostBalls = GHOST_Y_OFFSETS.map((offset) => ({
-    x: ball.x,
-    y: ball.y + offset,
-    spawnX: ball.x,
-  }));
+  const baseAngle = Math.atan2(ball.dy, ball.dx);
+  ghostBalls = GHOST_SCATTER_ANGLES.map((angleOffset) => {
+    const angle = baseAngle + angleOffset;
+    return {
+      x: ball.x,
+      y: ball.y,
+      dx: ball.speed * Math.cos(angle),
+      dy: ball.speed * Math.sin(angle),
+      spawnX: ball.x,
+    };
+  });
 }
 
-// Moves each mirror by the REAL ball's current dx/dy (read fresh from
-// latestState every frame, not a snapshot taken at spawn time) — that's what
-// guarantees they always travel at exactly the same speed as the real ball,
-// even if it later speeds up off a parry or flips direction off a wall
-// bounce. They just don't clamp to the walls themselves the way the real
-// ball does, which is fine since they fade out well before reaching one.
+// Moves each mirror along its own scattered path, bouncing off the top/
+// bottom walls exactly like the real ball does (so they read as plausible
+// balls in flight, not obviously fake streaks) — they just don't interact
+// with paddles, since they're purely visual and were never meant to be
+// "hittable." Dropped once they've traveled past GHOST_FADE_END (fully
+// faded by then anyway).
 function updateGhostBalls() {
   ghostBalls.forEach((g) => {
-    g.x += latestState.ball.dx;
-    g.y += latestState.ball.dy;
+    g.x += g.dx;
+    g.y += g.dy;
+    if (g.y <= 0 || g.y >= canvas.height - BALL_SIZE) {
+      g.dy *= -1;
+    }
   });
-  ghostBalls = ghostBalls.filter((g) => Math.abs(g.x - g.spawnX) < GHOST_FADE_DISTANCE);
+  ghostBalls = ghostBalls.filter((g) => Math.abs(g.x - g.spawnX) < GHOST_FADE_END);
 }
 
 function drawGhostBalls() {
   ghostBalls.forEach((g) => {
     const traveled = Math.abs(g.x - g.spawnX);
+    const fade =
+      traveled <= GHOST_FADE_START
+        ? 1
+        : Math.max(0, 1 - (traveled - GHOST_FADE_START) / (GHOST_FADE_END - GHOST_FADE_START));
     // Caps at 0.6 opacity (never fully solid) so they're never mistaken for
     // the real ball, which is always drawn fully opaque.
-    const alpha = Math.max(0, 1 - traveled / GHOST_FADE_DISTANCE) * 0.6;
+    const alpha = fade * 0.6;
     drawSprite(maceSprite, g.x, g.y, BALL_SIZE, BALL_SIZE, `rgba(255, 255, 255, ${alpha})`);
   });
 }
