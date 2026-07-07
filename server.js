@@ -49,7 +49,7 @@ const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 400;
 const PADDLE_WIDTH = 10;
 const PADDLE_HEIGHT = 80;
-const PADDLE_SPEED = 6;
+const PADDLE_SPEED = 8;
 const BALL_SIZE = 8;
 
 // Normal ball speed. Both dx and dy share this same value (so the ball
@@ -58,10 +58,9 @@ const BALL_SIZE = 8;
 const BASE_SPEED = 6;
 
 // A player only counts as "parrying" if they pressed F within this many ms
-// before the ball actually reaches their paddle. 50ms (~3 frames) proved too
-// tight in testing; 150ms felt a bit loose. 125ms splits the difference —
-// tune further based on feel.
-const PARRY_WINDOW_MS = 125;
+// before the ball actually reaches their paddle. Went 50 -> 150 -> 125 during
+// tuning; 125 still played too easy, so tightened to 85.
+const PARRY_WINDOW_MS = 85;
 const PARRY_SPEED_BONUS = 6; // added to current speed per successful parry
 const MAX_SPEED = 24;
 
