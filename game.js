@@ -122,15 +122,24 @@ let ghostBalls = [];
 // scattered heading but at the SAME SPEED (magnitude) the real ball had at
 // that instant — trig splits that one speed into a different dx/dy per
 // angle rather than each mirror inheriting the exact same vector.
+//
+// Important: the real ball's dx and dy are each independently set to
+// ±ball.speed (see server.js applyPaddleHit) — so ball.speed is a PER-AXIS
+// value, not the ball's actual resultant velocity. Its true speed is
+// Math.hypot(dx, dy), which comes out to speed * sqrt(2) on the diagonal.
+// Using the raw `speed` field here (as an earlier version of this did) made
+// every mirror slower than the real ball; Math.hypot is what actually
+// matches its on-screen speed.
 function spawnGhostBalls(ball) {
+  const speed = Math.hypot(ball.dx, ball.dy);
   const baseAngle = Math.atan2(ball.dy, ball.dx);
   ghostBalls = GHOST_SCATTER_ANGLES.map((angleOffset) => {
     const angle = baseAngle + angleOffset;
     return {
       x: ball.x,
       y: ball.y,
-      dx: ball.speed * Math.cos(angle),
-      dy: ball.speed * Math.sin(angle),
+      dx: speed * Math.cos(angle),
+      dy: speed * Math.sin(angle),
       spawnX: ball.x,
     };
   });
