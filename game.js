@@ -151,10 +151,10 @@ function spawnGhostBalls(ball) {
 // with paddles, since they're purely visual and were never meant to be
 // "hittable." Dropped once they've traveled past GHOST_FADE_END (fully
 // faded by then anyway).
-function updateGhostBalls() {
+function updateGhostBalls(deltaTicks) {
   ghostBalls.forEach((g) => {
-    g.x += g.dx;
-    g.y += g.dy;
+    g.x += g.dx * deltaTicks;
+    g.y += g.dy * deltaTicks;
     if (g.y <= 0 || g.y >= canvas.height - BALL_SIZE) {
       g.dy *= -1;
     }
@@ -610,9 +610,25 @@ function draw() {
 
 // We still need a render loop — but note it ONLY calls draw() now, never
 // update(). The server is doing all the physics; we just redraw whatever
-// the latest received state is, as fast as the browser can (~60fps).
-function loop() {
-  updateGhostBalls();
+// the latest received state is.
+//
+// requestAnimationFrame fires at your MONITOR'S refresh rate, not a fixed
+// 60fps — on a 120Hz/144Hz screen this loop runs 2-2.4x more often than the
+// server's fixed 60-ticks/sec simulation. The real ball never showed this
+// problem because it only visually moves when a new server message arrives
+// (naturally rate-limited), but ghostBalls move every single call to this
+// loop — so without correcting for that, they'd race across the screen at
+// whatever multiple of 60fps your monitor happens to run at. `deltaTicks`
+// converts real elapsed time into "how many 1/60-second server ticks did
+// that represent," so ghost balls move at the same simulated px/sec rate
+// as the real ball regardless of your display's actual refresh rate.
+let lastFrameTime = null;
+function loop(timestamp) {
+  if (lastFrameTime === null) lastFrameTime = timestamp;
+  const deltaTicks = (timestamp - lastFrameTime) / (1000 / 60);
+  lastFrameTime = timestamp;
+
+  updateGhostBalls(deltaTicks);
   draw();
   requestAnimationFrame(loop);
 }
