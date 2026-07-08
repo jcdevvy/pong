@@ -570,7 +570,7 @@ function draw() {
   ctx.font = "14px sans-serif";
   ctx.fillStyle = "white";
   ctx.textAlign = "center";
-  ctx.fillText("W / S: Move     F: Parry     C: Ghosthit", canvas.width / 2, canvas.height - 10);
+  ctx.fillText("W / S: Move     F: Parry     C: Ghosthit -3 Mana", canvas.width / 2, canvas.height - 10);
   ctx.textAlign = "left";
 
   // Same keys again, as a quick-glance reminder in the narrow strips outside
